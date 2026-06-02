@@ -17,6 +17,8 @@
 
 #include "SimulationFeatures.hh"
 
+#include <BulletCollision/CollisionShapes/btSphereShape.h>
+
 #include <gz/math/eigen3/Conversions.hh>
 
 #include <limits>
@@ -26,7 +28,84 @@
 namespace gz {
 namespace physics {
 namespace bullet_featherstone {
+namespace internal
+{
+  // Internal per-hit data
+  struct RawHit
+  {
+    LinearVector3d normal{0, 0, 0};
+    LinearVector3d point{0, 0, 0};
+    double depth{0.0};
+  };
 
+
+  struct SphereQueryCallback : public btCollisionWorld::ContactResultCallback
+  {
+    const btCollisionObject *sphere;
+    std::unordered_map<std::size_t, RawHit> &hits;
+
+    SphereQueryCallback(const btCollisionObject *_sphere,
+                        std::unordered_map<std::size_t, RawHit> &_hits)
+      : sphere(_sphere), hits(_hits) {}
+
+    btScalar addSingleResult(
+        btManifoldPoint &cp,
+        const btCollisionObjectWrapper *colObj0Wrap, int /*partId0*/, int index0,
+        const btCollisionObjectWrapper *colObj1Wrap, int /*partId1*/, int index1)
+        override
+    {
+      const bool sphereIsA =
+          colObj0Wrap->getCollisionObject() == sphere;
+      const btCollisionObjectWrapper *worldWrap =
+          sphereIsA ? colObj1Wrap : colObj0Wrap;
+      const int childIndex = sphereIsA ? index1 : index0;
+
+      const btCollisionShape *linkShape =
+          worldWrap->getCollisionObject()->getCollisionShape();
+      if (!linkShape || !linkShape->isCompound())
+        return btScalar(0);
+
+      const auto *compound =
+          static_cast<const btCompoundShape *>(linkShape);
+      const int n = compound->getNumChildShapes();
+      if (n == 0)
+        return btScalar(0);
+
+      const btCollisionShape *child =
+          (childIndex >= 0 && childIndex < n)
+              ? compound->getChildShape(childIndex)
+              : compound->getChildShape(0);
+      if (!child)
+        return btScalar(0);
+
+      const std::size_t id =
+          static_cast<std::size_t>(child->getUserIndex());
+
+      // m_normalWorldOnB points from colObj1 (B) toward colObj0 (A).
+      // We want the normal pointing from the hit surface toward the sphere.
+      // If sphere is A (colObj0): normal is already B→A = surface→sphere.
+      // If sphere is B (colObj1): normal is B→A = sphere→surface, so flip.
+      const btVector3 btNormal = sphereIsA
+          ?  cp.m_normalWorldOnB
+          : -cp.m_normalWorldOnB;
+      const LinearVector3d normal(
+          btNormal.x(), btNormal.y(), btNormal.z());
+      const btVector3 &btPoint = cp.m_positionWorldOnB;
+      const LinearVector3d point(
+          btPoint.x(), btPoint.y(), btPoint.z());
+      const double depth = -static_cast<double>(cp.m_distance1);
+
+      auto [it, inserted] = hits.emplace(id, RawHit{});
+      if (inserted || depth > it->second.depth)
+      {
+        it->second.normal = normal;
+        it->second.point  = point;
+        it->second.depth  = depth;
+      }
+      return btScalar(0);
+    }
+  };
+}
 /////////////////////////////////////////////////
 bool hasConvexHullChildShapes(
     const btCollisionShape *_shape)
@@ -396,6 +475,51 @@ void SimulationFeatures::Write(ChangedWorldPoses &_changedPoses) const
   // newPoses ensures that we aren't caching data for links that were removed
   this->prevLinkPoses = std::move(newPoses);
 }
+/////////////////////////////////////////////////
+std::vector<QuerySphereShapeFeature::HitData<FeaturePolicy3d>>
+SimulationFeatures::QuerySphereIntersections(
+    const Identity &_worldID,
+    const LinearVector3d &_center,
+    double _radius) const
+{
+
+  const auto *worldInfo = this->ReferenceInterface<WorldInfo>(_worldID);
+  if (!worldInfo)
+    return {};
+
+  btSphereShape sphereShape(static_cast<btScalar>(_radius));
+  btCollisionObject sphereObj;
+  sphereObj.setCollisionShape(&sphereShape);
+  btTransform tf;
+  tf.setIdentity();
+  tf.setOrigin(convertVec(_center));
+  sphereObj.setWorldTransform(tf);
+
+  using HitData = QuerySphereShapeFeature::HitData<FeaturePolicy3d>;
+
+  // Key: collision entity ID → best hit (deepest penetration wins).
+  std::unordered_map<std::size_t, internal::RawHit> hitMap;
+  internal::SphereQueryCallback callback(&sphereObj, hitMap);
+
+  worldInfo->world->getCollisionWorld()->contactTest(&sphereObj, callback);
+
+  // Build result — construct HitData in-place so Identity is never
+  // default-constructed (it has a private default ctor).
+  std::vector<HitData> result;
+  result.reserve(hitMap.size());
+  for (const auto &[id, raw] : hitMap)
+  {
+    auto it = this->collisions.find(id);
+    if (it != this->collisions.end())
+    {
+      result.push_back(HitData{
+          this->GenerateIdentity(id, it->second),
+          raw.normal, raw.point, raw.depth});
+    }
+  }
+  return result;
+}
+
 }  // namespace bullet_featherstone
 }  // namespace physics
 }  // namespace gz

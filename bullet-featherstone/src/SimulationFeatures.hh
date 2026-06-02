@@ -24,6 +24,7 @@
 #include <gz/physics/CanWriteData.hh>
 #include <gz/physics/ForwardStep.hh>
 #include <gz/physics/GetContacts.hh>
+#include <gz/physics/QuerySphereShape.hh>
 
 #include "Base.hh"
 
@@ -33,7 +34,8 @@ namespace bullet_featherstone {
 
 struct SimulationFeatureList : gz::physics::FeatureList<
   ForwardStep,
-  GetContactsFromLastStepFeature
+  GetContactsFromLastStepFeature,
+  QuerySphereShapeFeature
 > { };
 
 class SimulationFeatures :
@@ -57,6 +59,12 @@ class SimulationFeatures :
 
   public: std::vector<ContactInternal> GetContactsFromLastStep(
       const Identity &_worldID) const override;
+
+  public: std::vector<QuerySphereShapeFeature::HitData<FeaturePolicy3d>>
+      QuerySphereIntersections(
+      const Identity &_worldID,
+      const LinearVector3d &_center,
+      double _radius) const override;
 
   /// \brief link poses from the most recent pose change/update.
   /// The key is the link's ID, and the value is the link's pose

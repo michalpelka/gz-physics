@@ -50,6 +50,7 @@
 #include <gz/physics/GetContacts.hh>
 #include <gz/physics/GetRayIntersection.hh>
 #include <gz/physics/Joint.hh>
+#include "gz/physics/QuerySphereShape.hh"
 #include "gz/physics/SphereShape.hh"
 
 #include <gz/physics/ConstructEmpty.hh>
@@ -2258,6 +2259,46 @@ TYPED_TEST(SimulationFeaturesRayIntersectionTest, UnsupportedRayIntersections)
   }
 }
 
+/////////////////////////////////////////////////
+struct FeaturesSphereQuery : gz::physics::FeatureList<
+  gz::physics::sdf::ConstructSdfWorld,
+  gz::physics::QuerySphereShapeFeature,
+  gz::physics::ForwardStep
+> {};
+
+template <class T>
+class SimulationFeaturesSphereQueryTest :
+  public SimulationFeaturesTest<T>{};
+using SimulationFeaturesSphereQueryTestTypes =
+    ::testing::Types<FeaturesSphereQuery>;
+TYPED_TEST_SUITE(SimulationFeaturesSphereQueryTest,
+                 SimulationFeaturesSphereQueryTestTypes);
+
+// sphere.sdf: unit sphere (radius=1) with collision "sphere_collision",
+// model centred at (0, 0, 2).
+TYPED_TEST(SimulationFeaturesSphereQueryTest, SphereQueryHit)
+{
+  for (const std::string &name : this->pluginNames)
+  {
+    auto world = LoadPluginAndWorld<FeaturesSphereQuery>(
+        this->loader, name, common_test::worlds::kSphereSdf);
+
+    // One forward step populates the broadphase.
+    StepWorld<FeaturesSphereQuery>(world, true, 1);
+
+    // Query sphere centred at the model origin — should hit sphere_collision.
+    auto hits = world->QuerySphereIntersections(
+        Eigen::Vector3d(0, 0, 2), 0.5);
+    EXPECT_EQ(1u, hits.size());
+
+    // Query sphere far away — should return nothing.
+    auto misses = world->QuerySphereIntersections(
+        Eigen::Vector3d(0, 0, 100), 0.5);
+    EXPECT_EQ(0u, misses.size());
+  }
+}
+
+/////////////////////////////////////////////////
 int main(int argc, char *argv[])
 {
   ::testing::InitGoogleTest(&argc, argv);

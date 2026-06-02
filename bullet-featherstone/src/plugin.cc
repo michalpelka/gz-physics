@@ -18,6 +18,7 @@
 #include <gz/physics/FeatureList.hh>
 #include <gz/physics/FeaturePolicy.hh>
 #include <gz/physics/GetEntities.hh>
+#include <gz/physics/QuerySphereShape.hh>
 #include <gz/physics/Register.hh>
 
 #include "Base.hh"
